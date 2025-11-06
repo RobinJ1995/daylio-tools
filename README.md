@@ -1,0 +1,1 @@
+Read and parse Daylio backup files (the full backups you get from the "Backup & Restore" section, not the very limited CSV exports).
