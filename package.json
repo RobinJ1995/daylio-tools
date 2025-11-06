@@ -1,0 +1,19 @@
+{
+  "name": "daylio-tools",
+  "version": "0.1.0",
+  "description": "Tools to process Daylio backups",
+  "license": "GPL-3.0",
+  "author": "Robin Jacobs",
+  "type": "commonjs",
+  "main": "main.js",
+  "bin": {
+    "daylio-tools": "./main.js"
+  },
+  "scripts": {
+    "start": "node main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "unzipper": "^0.10.14"
+  }
+}
