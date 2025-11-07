@@ -3,6 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const unzipper = require('unzipper');
+const math = require('mathjs');
+
+const { filterObjects, mapObjects } = require('./utils');
 
 const DAYLIO_PREDEFINED_MOOD_NAMES = {
     1: 'rad',
@@ -82,10 +85,11 @@ const getDays = data => {
     });
 }
 
+const getTagNames = data => getTags(data).map(tag => tag.name);
 const _initTagCooccurrenceMap = data => (tagNames => tagNames.reduce((acc, i) => ({
     ...acc,
     [i]: tagNames.reduce((inner, j) => ({...inner, [j]: 0}), {})
-}), {}))(getTagsWithGroupsPopulated(data).map(tag => tag.name));
+}), {}))(getTagNames(data));
 const _sortTagCooccurrenceMap = cooccurrence => Object.fromEntries(
     Object.entries(cooccurrence)
         .sort(([keyA, objA], [keyB, objB]) => {
@@ -121,6 +125,102 @@ const _getTagCooccurrence = (data, entriesSelector) => {
 };
 const getTagCooccurrenceByEntry = data => _getTagCooccurrence(data, getEntriesPopulated);
 const getTagCooccurrenceByDay = data => _getTagCooccurrence(data, getDays);
+const _getMoodsByTag = (data, entriesSelector, moodValueSelector) => {
+    const entries = entriesSelector(data);
+    const tagNames = getTagNames(data);
+    const moodsByTagName = tagNames.reduce((acc, tagName) => ({
+        ...acc,
+        [tagName]: []
+    }), {});
+
+    entries.forEach(entry => {
+        entry.tags.forEach(tag => {
+            moodsByTagName[tag.name].push(moodValueSelector(entry));
+        });
+    });
+
+    const result = tagNames.reduce((acc, tagName) => ({
+        ...acc,
+        [tagName]: {
+            ...(moodsByTagName[tagName].length > 0 ? {
+                average: moodsByTagName[tagName].reduce((acc, val) => acc + val, 0) / moodsByTagName[tagName].length,
+                median: math.median(moodsByTagName[tagName])
+            } : { average: null, median: null}),
+            moodValues: moodsByTagName[tagName],
+            nEntries: moodsByTagName[tagName].length,
+        }
+    }), {});
+
+    return _sortMoodsByTagMap(result);
+};
+const _sortMap = ((obj, keySorter = () => 0, valueSorter = () => 0) => Object.fromEntries(
+    Object.entries(obj)
+        .sort(([kA, vA], [kB, vB]) => (valueSorter(vB) || 0) - (valueSorter(vA) || 0))
+        .sort(([kA, vA], [kB, vB]) => (keySorter(kB) || 0) - (keySorter(kA) || 0))
+));
+const _sortMoodsByTagMap = ((moodsByTag, key = 'average') => _sortMap(moodsByTag, () => 0, x => x.average));
+const getMoodsByTagByEntry = data => _getMoodsByTag(data, getEntriesPopulated, entry => entry.mood.value);
+const getMoodsByTagByDay = data => _getMoodsByTag(data, getDays, day => day.moodAverage);
+const _getMoodWithVsWithout = (data, entriesSelector, moodValueSelector, minEntriesOnBothForRelevance = 0) => {
+    const getNegativeTagName = tagName => `not:${tagName}`;
+
+    const entries = entriesSelector(data);
+    const tagNames = getTagNames(data);
+    const moodsByTagName = tagNames.reduce((acc, tagName) => ({
+        ...acc,
+        [tagName]: [],
+        [getNegativeTagName(tagName)]: [],
+    }), {});
+
+    entries.forEach(entry => {
+        tagNames.forEach(tagName => {
+            const entryHasTag = entry.tags.some(tag => tag.name === tagName);
+            const moodValue = moodValueSelector(entry);
+
+            moodsByTagName[entryHasTag ? tagName : getNegativeTagName(tagName)].push(moodValue);
+        });
+    });
+
+    const result = tagNames.reduce((acc, tagName) => {
+        if (moodsByTagName[tagName].length < minEntriesOnBothForRelevance
+            || moodsByTagName[getNegativeTagName(tagName)].length < minEntriesOnBothForRelevance) {
+            // Skip if less than `minEntriesOnBothForRelevance` entries for both entries with and without tag
+            return acc;
+        }
+
+        const withVsWithout = {
+            'with': {
+                ...(moodsByTagName[tagName].length > 0 ? {
+                    average: moodsByTagName[tagName].reduce((acc, val) => acc + val, 0) / moodsByTagName[tagName].length,
+                    median: math.median(moodsByTagName[tagName])
+                } : {average: null, median: null}),
+                nEntries: moodsByTagName[tagName].length,
+            },
+            'without': {
+                ...(moodsByTagName[getNegativeTagName(tagName)].length > 0 ? {
+                    average: moodsByTagName[getNegativeTagName(tagName)].reduce((acc, val) => acc + val, 0) / moodsByTagName[getNegativeTagName(tagName)].length,
+                    median: math.median(moodsByTagName[getNegativeTagName(tagName)])
+                } : {average: null, median: null}),
+                nEntries: moodsByTagName[getNegativeTagName(tagName)].length,
+            }
+        };
+
+        return {
+            ...acc,
+            [tagName]: {
+                ...withVsWithout,
+                diff: {
+                    average: withVsWithout.with.average - withVsWithout.without.average,
+                    median: withVsWithout.with.median - withVsWithout.without.median,
+                },
+            }
+        }
+    }, {});
+
+    return _sortMap(result, () => 0, x => x.diff.average);
+}
+const getMoodOnEntriesWithVsWithout = data => _getMoodWithVsWithout(data, getEntriesPopulated, entry => entry.mood.value, 3);
+const getMoodOnDaysWithVsWithout = data => _getMoodWithVsWithout(data, getDays, day => day.moodAverage, 3);
 
 (async () => {
     const arg = process.argv[2];
@@ -131,8 +231,13 @@ const getTagCooccurrenceByDay = data => _getTagCooccurrence(data, getDays);
 
     const data = await getDataFromDaylioArchive(arg);
 
-    const days = getDays(data);
-    const tagCooccurrence = getTagCooccurrenceByDay(data);
+    const tags = getTagsWithGroupsPopulated(data);
 
-    console.log(tagCooccurrence);
+    const r = mapObjects(getMoodOnDaysWithVsWithout(data), ([k, v]) => [k, {
+        'with': v['with']['average'],
+        'without': v['without']['average'],
+        'diff': v['diff']['average']
+    }]);
+
+    console.log(r);
 })();
