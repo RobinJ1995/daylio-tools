@@ -25,7 +25,9 @@ const getDataFromDaylioArchive = async (archivePath) => {
 
     const dir = await unzipper.Open.file(backupArchiveFile);
     const entry = dir.files.find(f => /(^|\/)backup\.daylio$/.test(f.path));
-    if (!entry) throw new Error('Could not find "backup.daylio" inside the archive.');
+    if (!entry) {
+        throw new Error('Could not find "backup.daylio" inside the archive.');
+    }
 
     const base64 = (await entry.buffer()).toString('utf8');
     const json = Buffer.from(base64, 'base64').toString('utf8');
@@ -80,6 +82,46 @@ const getDays = data => {
     });
 }
 
+const _initTagCooccurrenceMap = data => (tagNames => tagNames.reduce((acc, i) => ({
+    ...acc,
+    [i]: tagNames.reduce((inner, j) => ({...inner, [j]: 0}), {})
+}), {}))(getTagsWithGroupsPopulated(data).map(tag => tag.name));
+const _sortTagCooccurrenceMap = cooccurrence => Object.fromEntries(
+    Object.entries(cooccurrence)
+        .sort(([keyA, objA], [keyB, objB]) => {
+            const sumA = Object.values(objA).reduce((acc, val) => acc + val, 0);
+            const sumB = Object.values(objB).reduce((acc, val) => acc + val, 0);
+            return sumB - sumA;
+        })
+        .map(([outerKey, innerObj]) => [
+            outerKey,
+            Object.fromEntries(
+                Object.entries(innerObj)
+                    .sort(([, a], [, b]) => b - a)
+            )
+        ])
+);
+const _getTagCooccurrence = (data, entriesSelector) => {
+    const entries = entriesSelector(data);
+    const cooccurrence = _initTagCooccurrenceMap(data);
+
+    entries.forEach(entry => {
+        entry.tags.forEach(tag => {
+            entry.tags.forEach(cooccurringTag => {
+                if (tag.name === cooccurringTag.name) {
+                    return;
+                }
+
+                cooccurrence[tag.name][cooccurringTag.name]++;
+            });
+        });
+    });
+
+    return _sortTagCooccurrenceMap(cooccurrence);
+};
+const getTagCooccurrenceByEntry = data => _getTagCooccurrence(data, getEntriesPopulated);
+const getTagCooccurrenceByDay = data => _getTagCooccurrence(data, getDays);
+
 (async () => {
     const arg = process.argv[2];
     if (!arg || arg === '-h' || arg === '--help') {
@@ -90,6 +132,7 @@ const getDays = data => {
     const data = await getDataFromDaylioArchive(arg);
 
     const days = getDays(data);
+    const tagCooccurrence = getTagCooccurrenceByDay(data);
 
-    console.log(days);
+    console.log(tagCooccurrence);
 })();
