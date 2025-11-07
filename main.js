@@ -68,11 +68,13 @@ const getDays = data => {
 
     return datestamps.map(datestamp => {
         const entries = allEntries.filter(entry => entry.datestamp === datestamp);
+        const tags = [...new Set(entries.flatMap(entry => entry.tags))];
         const moodAverage = entries.reduce((acc, entry) => acc + entry.mood.value, 0) / entries.length;
 
         return {
             datestamp,
             entries,
+            tags,
             moodAverage,
         }
     });
